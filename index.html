@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Riff — Recorrido virtual 360</title>
+
+<!-- ============================================================
+  RECORRIDO VIRTUAL 360 — RIFF (versión GitHub Pages, alta calidad)
+  Motor: Pannellum 2.5.6
+
+  FOTOS:
+    Van en la carpeta /fotos del propio repositorio, con nombre
+    01.jpg ... 21.jpg (11.jpg = nevera abierta). Así no pasan por
+    WordPress y no se recomprimen ni se recortan a 2560 px.
+    Tamaño recomendado: 8192 x 4096 px, JPG calidad 85.
+
+  ICONOS:
+    Siguen enlazados a bottaromarketing.com. Si prefieres que el
+    repo sea 100% independiente, sube avanzar.png, abrir.png e
+    info.png a /iconos y cambia las tres rutas de ICON_*.
+
+  MAPA DE CONEXIONES:
+    01 <-> 02 <-> 03 <-> 04 <-> 05 <-> 06 <-> 07 <-> 08 <-> 09
+    09 <-> 10 <-> 11               (10=nevera cerrada, 11=abierta)
+    10 <-> 12 <-> 13 <-> 14 <-> 15 <-> 16
+    09 <-> 17
+    17 <-> 18 <-> 19 <-> 20 <-> 21 <-> 17
+============================================================= -->
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.js"></script>
+
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0d1b24; overflow: hidden;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  :root {
+    --rf-ink: #0d1b24;
+    --rf-accent: #6ee7c9;
+    --rf-cream: #f4f1ea;
+  }
+
+  /* El visor ocupa toda la ventana: ideal para incrustarlo con iframe */
+  #rf-panorama { position: fixed; inset: 0; width: 100%; height: 100%; }
+
+  .pnlm-tooltip { font-family: system-ui, sans-serif; }
+  .pnlm-hotspot-base { background: none !important; }
+
+  /* Título de la escena actual */
+  #rf-scene-title {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    background: rgba(13, 27, 36, 0.78); color: var(--rf-cream);
+    padding: 6px 14px; border-radius: 999px; font-size: 0.85rem;
+    border: 1px solid rgba(110, 231, 201, 0.35);
+    z-index: 5; pointer-events: none; white-space: nowrap;
+    transition: opacity 0.3s ease;
+  }
+  #rf-scene-title b { color: var(--rf-accent); font-weight: 600; margin-right: 6px; }
+
+  /* Iconos de hotspot */
+  .rf-hotspot { width: 65px; height: 48px; display: flex; align-items: center;
+    justify-content: center; cursor: pointer; }
+  .rf-hotspot .rf-hotspot-icon {
+    width: 58px; height: auto;
+    filter: drop-shadow(0 0 7px rgba(110, 231, 201, 0.9)) drop-shadow(0 0 2px rgba(13, 27, 36, 0.7));
+    transition: transform 0.15s ease;
+    animation: rf-pulse 2.2s ease-in-out infinite;
+  }
+  .rf-hotspot:hover .rf-hotspot-icon { transform: scale(1.15); }
+  @keyframes rf-pulse { 0%,100% { opacity: 0.65; } 50% { opacity: 1; } }
+
+  .rf-hotspot-label {
+    position: absolute; top: 44px; left: 50%; transform: translateX(-50%);
+    background: var(--rf-ink); color: var(--rf-cream); padding: 3px 10px;
+    border-radius: 6px; font-size: 0.75rem; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: opacity 0.15s ease;
+  }
+  .rf-hotspot:hover .rf-hotspot-label { opacity: 1; }
+
+  /* Panel de información de los cuadros */
+  #rf-info-panel {
+    position: fixed; left: 16px; right: 16px; bottom: 16px; max-width: 480px;
+    background: rgba(13, 27, 36, 0.95); border: 1px solid rgba(110, 231, 201, 0.4);
+    border-radius: 10px; padding: 16px 18px; color: var(--rf-cream);
+    font-size: 0.9rem; line-height: 1.4; display: none; z-index: 10;
+  }
+  #rf-info-panel.rf-visible { display: block; }
+  #rf-info-panel a { color: var(--rf-accent); }
+  #rf-info-panel-title { color: var(--rf-accent); font-weight: 600; margin: 0 0 6px; font-size: 0.95rem; }
+  #rf-info-panel-close { position: absolute; top: 8px; right: 10px; background: none; border: none;
+    color: var(--rf-cream); font-size: 1.1rem; cursor: pointer; line-height: 1; }
+</style>
+</head>
+<body>
+
+<div id="rf-panorama"></div>
+<div id="rf-scene-title"><b>Riff</b><span id="rf-scene-name">Entrada</span></div>
+
+<div id="rf-info-panel">
+  <button id="rf-info-panel-close" aria-label="Cerrar">✕</button>
+  <p id="rf-info-panel-title"></p>
+  <p id="rf-info-panel-text"></p>
+</div>
+
+<script>
+  (function () {
+    var ICON_AVANZAR = "https://bottaromarketing.com/wp-content/uploads/2026/09/avanzar.png";
+    var ICON_ABRIR   = "https://bottaromarketing.com/wp-content/uploads/2026/09/abrir.png";
+    var ICON_INFO    = "https://bottaromarketing.com/wp-content/uploads/2026/09/info.png";
+
+    // Fotos en alta calidad dentro del repo: fotos/01.jpg ... fotos/21.jpg
+    function foto(n) { return "fotos/" + n + ".jpg"; }
+
+    // Panel de información
+    var infoPanel = document.getElementById("rf-info-panel");
+    var infoPanelTitle = document.getElementById("rf-info-panel-title");
+    var infoPanelText = document.getElementById("rf-info-panel-text");
+    document.getElementById("rf-info-panel-close").addEventListener("click", function () {
+      infoPanel.classList.remove("rf-visible");
+    });
+
+    function openInfoPanel(title, text) {
+      infoPanelTitle.textContent = title;
+      // Convierte las URLs del texto en enlaces clicables
+      infoPanelText.innerHTML = "";
+      text.split(/(https?:\/\/\S+)/).forEach(function (part) {
+        if (/^https?:\/\//.test(part)) {
+          var a = document.createElement("a");
+          a.href = part; a.textContent = part.replace(/^https?:\/\//, "").replace(/\/$/, "");
+          a.target = "_blank"; a.rel = "noopener";
+          infoPanelText.appendChild(a);
+        } else {
+          infoPanelText.appendChild(document.createTextNode(part));
+        }
+      });
+      infoPanel.classList.add("rf-visible");
+    }
+
+    function renderIconHotspot(hotSpotDiv, args) {
+      hotSpotDiv.classList.add("rf-hotspot");
+      var iconSrc = ICON_AVANZAR;
+      if (args.kind === "abrir") iconSrc = ICON_ABRIR;
+      if (args.kind === "info") iconSrc = ICON_INFO;
+      hotSpotDiv.innerHTML =
+        '<img class="rf-hotspot-icon" src="' + iconSrc + '" style="transform: rotate(' +
+        (args.bearing || 0) + 'deg);" alt="" />' +
+        '<span class="rf-hotspot-label">' + args.label + "</span>";
+      if (args.kind === "info") {
+        hotSpotDiv.addEventListener("click", function () {
+          openInfoPanel(args.label, args.text || "");
+        });
+      }
+    }
+
+    var scenes = {
+
+      escena01: {
+        title: "Entrada",
+        yaw: 195,
+        panorama: foto("01"),
+        hotSpots: [
+          { pitch: -30, yaw: 195, type: "scene", sceneId: "escena02",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+        ],
+      },
+
+      escena02: {
+        title: "Pasillo",
+        yaw: 180,
+        panorama: foto("02"),
+        hotSpots: [
+          { pitch: -30, yaw: 0, type: "scene", sceneId: "escena01",
+            targetYaw: 15,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena03",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+        ],
+      },
+
+      escena03: {
+        title: "Pasillo",
+        panorama: foto("03"),
+        hotSpots: [
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena02",
+            targetYaw: 0,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 0, type: "scene", sceneId: "escena04",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+        ],
+      },
+
+      escena04: {
+        title: "Pasillo",
+        yaw: 5,
+        panorama: foto("04"),
+        hotSpots: [
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena03",
+            targetYaw: 180,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 5, type: "scene", sceneId: "escena05",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+        ],
+      },
+
+      escena05: {
+        title: "Pasillo (cuadro)",
+        yaw: 5,
+        panorama: foto("05"),
+        hotSpots: [
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena04",
+            targetYaw: -175,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 5, type: "scene", sceneId: "escena06",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+          { pitch: 20, yaw: 270, type: "info",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "info", label: "Cuadro",
+              text: "Sinse Art - Pinturas by: https://sinse.art/ - Bastian Sinsé" } },
+        ],
+      },
+
+      escena06: {
+        title: "Pasillo (cuadro)",
+        panorama: foto("06"),
+        hotSpots: [
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena05",
+            targetYaw: -175,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 0, type: "scene", sceneId: "escena07",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+          { pitch: 12, yaw: 70, type: "info",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "info", label: "Cuadro",
+              text: "Sinse Art - Pinturas by: https://sinse.art/ - Bastian Sinsé" } },
+        ],
+      },
+
+      escena07: {
+        title: "Pasillo (cuadro)",
+        panorama: foto("07"),
+        hotSpots: [
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena06",
+            targetYaw: 180,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 0, type: "scene", sceneId: "escena08",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+          { pitch: 12, yaw: 58, type: "info",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "info", label: "Cuadro",
+              text: "Sinse Art - Pinturas by: https://sinse.art/ - Bastian Sinsé" } },
+        ],
+      },
+
+      escena08: {
+        title: "Pasillo",
+        panorama: foto("08"),
+        hotSpots: [
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena07",
+            targetYaw: 180,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 0, type: "scene", sceneId: "escena09",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+        ],
+      },
+
+      // 09 es un cruce: pasillo (08 <-> 10) + desviación a 17
+      escena09: {
+        title: "Pasillo (cruce)",
+        panorama: foto("09"),
+        hotSpots: [
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena08",
+            targetYaw: 180,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 0, type: "scene", sceneId: "escena10",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+          { pitch: -30, yaw: 50, type: "scene", sceneId: "escena17",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Ir a la mesa", bearing: 0 } },
+        ],
+      },
+
+      // 10: nevera cerrada — conecta con 09 (atrás), 11 (abrir) y 12 (sigue pasillo)
+      escena10: {
+        title: "Pasillo — nevera",
+        panorama: foto("10"),
+        hotSpots: [
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena09",
+            targetYaw: 180,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -15, yaw: 270, type: "scene", sceneId: "escena11",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "abrir", label: "Abrir nevera", bearing: 0 } },
+          { pitch: -30, yaw: 0, type: "scene", sceneId: "escena12",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+        ],
+      },
+
+      // 11: misma posición que 10 pero con la nevera abierta
+      escena11: {
+        title: "Nevera abierta",
+        yaw: 270,
+        panorama: foto("11"),
+        hotSpots: [
+          { pitch: -10, yaw: 270, type: "scene", sceneId: "escena10",
+            targetYaw: 180,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "abrir", label: "Cerrar nevera", bearing: 0 } },
+        ],
+      },
+
+      escena12: {
+        title: "Pasillo",
+        yaw: 25,
+        panorama: foto("12"),
+        hotSpots: [
+          { pitch: -30, yaw: 180, type: "scene", sceneId: "escena10",
+            targetYaw: 180,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 30, type: "scene", sceneId: "escena13",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+        ],
+      },
+
+      escena13: {
+        title: "Pasillo (cuadro)",
+        yaw: 270,
+        panorama: foto("13"),
+        hotSpots: [
+          { pitch: -30, yaw: 90, type: "scene", sceneId: "escena12",
+            targetYaw: -155,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 270, type: "scene", sceneId: "escena14",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+          { pitch: 5, yaw: 180, type: "info",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "info", label: "Cuadro",
+              text: "Sinse Art - Pinturas by: https://sinse.art/ - Bastian Sinsé" } },
+        ],
+      },
+
+      escena14: {
+        title: "Pasillo (cuadro)",
+        yaw: 270,
+        panorama: foto("14"),
+        hotSpots: [
+          { pitch: -30, yaw: 90, type: "scene", sceneId: "escena13",
+            targetYaw: 90,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 270, type: "scene", sceneId: "escena15",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+          { pitch: 5, yaw: 180, type: "info",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "info", label: "Cuadro",
+              text: "Sinse Art - Pinturas by: https://sinse.art/ - Bastian Sinsé" } },
+        ],
+      },
+
+      escena15: {
+        title: "Pasillo (cuadro)",
+        yaw: 230,
+        panorama: foto("15"),
+        hotSpots: [
+          { pitch: -30, yaw: 0, type: "scene", sceneId: "escena14",
+            targetYaw: 90,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 250, type: "scene", sceneId: "escena16",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Avanzar", bearing: 0 } },
+          { pitch: -5, yaw: 90, type: "info",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "info", label: "Cuadro",
+              text: "Sinse Art - Pinturas by: https://sinse.art/ - Bastian Sinsé" } },
+        ],
+      },
+
+      escena16: {
+        title: "Pasillo (fin)",
+        yaw: -50,
+        panorama: foto("16"),
+        hotSpots: [
+          { pitch: -30, yaw: 90, type: "scene", sceneId: "escena15",
+            targetYaw: 50,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+        ],
+      },
+
+      // 17: nodo de la zona de la mesa — conecta con 09, 18 y 21 (cierre del círculo)
+      escena17: {
+        title: "Mesa grande",
+        yaw: -165,
+        panorama: foto("17"),
+        hotSpots: [
+          { pitch: -30, yaw: 50, type: "scene", sceneId: "escena09",
+            targetYaw: 180,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver al pasillo", bearing: 0 } },
+          { pitch: -30, yaw: -170, type: "scene", sceneId: "escena18",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Rodear la mesa", bearing: 0 } },
+          { pitch: -30, yaw: 280, type: "scene", sceneId: "escena21",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Rodear la mesa", bearing: 0 } },
+        ],
+      },
+
+      escena18: {
+        title: "Alrededor de la mesa",
+        yaw: -50,
+        panorama: foto("18"),
+        hotSpots: [
+          { pitch: -30, yaw: 75, type: "scene", sceneId: "escena17",
+            targetYaw: 15,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: -30, type: "scene", sceneId: "escena19",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Seguir", bearing: 0 } },
+        ],
+      },
+
+      escena19: {
+        title: "Alrededor de la mesa",
+        yaw: -60,
+        panorama: foto("19"),
+        hotSpots: [
+          { pitch: -30, yaw: 20, type: "scene", sceneId: "escena18",
+            targetYaw: 130,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: -60, type: "scene", sceneId: "escena20",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Seguir", bearing: 0 } },
+        ],
+      },
+
+      escena20: {
+        title: "Alrededor de la mesa",
+        yaw: -70,
+        panorama: foto("20"),
+        hotSpots: [
+          { pitch: -30, yaw: 0, type: "scene", sceneId: "escena19",
+            targetYaw: 120,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 270, type: "scene", sceneId: "escena21",
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Seguir", bearing: 0 } },
+        ],
+      },
+
+      escena21: {
+        title: "Alrededor de la mesa",
+        yaw: -90,
+        panorama: foto("21"),
+        hotSpots: [
+          { pitch: -50, yaw: 90, type: "scene", sceneId: "escena20",
+            targetYaw: 110,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver", bearing: 0 } },
+          { pitch: -30, yaw: 270, type: "scene", sceneId: "escena17",
+            targetYaw: 15,
+            createTooltipFunc: renderIconHotspot,
+            createTooltipArgs: { kind: "avanzar", label: "Volver a la mesa", bearing: 0 } },
+        ],
+      },
+    };
+
+
+    var viewer = pannellum.viewer("rf-panorama", {
+      default: {
+        firstScene: "escena01",
+        author: "Riff",
+        sceneFadeDuration: 800,
+        autoLoad: true,
+        compass: false,
+        hfov: 100,
+        minHfov: 40,
+        maxHfov: 120,
+        showFullscreenCtrl: true,
+      },
+      scenes: scenes,
+    });
+
+    // -----------------------------------------------------------
+    // Precarga de las escenas vecinas: mientras miras una escena,
+    // el navegador va descargando las fotos a las que puedes saltar,
+    // así el cambio es casi instantáneo aunque las fotos pesen más.
+    // -----------------------------------------------------------
+    var precargadas = {};
+    function precargarVecinas(sceneId) {
+      (scenes[sceneId].hotSpots || []).forEach(function (h) {
+        if (h.type !== "scene" || precargadas[h.sceneId]) return;
+        precargadas[h.sceneId] = true;
+        var img = new Image();
+        img.src = scenes[h.sceneId].panorama;
+      });
+    }
+
+    var sceneName = document.getElementById("rf-scene-name");
+    function alCambiarEscena() {
+      var id = viewer.getScene();
+      sceneName.textContent = scenes[id].title;
+      infoPanel.classList.remove("rf-visible");
+      precargarVecinas(id);
+    }
+    viewer.on("load", alCambiarEscena);
+  })();
+</script>
+</body>
+</html>
